@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Control the MSI RTX 5090 SUPRIM LIQUID SOC LEDs from Linux (no OpenRGB, no NVAPI).
+
+Writes SignalRGB's own 50-series byte sequence to the LED MCU at i2c 0x68 on the
+GPU's internal port 1. State is volatile: a reboot or power cycle clears it.
+"""
+import subprocess, sys, time, argparse, os, datetime
+
+BUS="4"; ADDR="0x68"
+EXPECT_BUS_NAME="NVIDIA i2c adapter 1 at 1:00.0"; EXPECT_PCI="0000:01:00.0"
+REG_ALLOW={0x2e,0x46,0x22,0x36,0x38,0x30,0x31,0x32}          # edit with care
+LOG=os.path.expanduser("~/Desktop/srgb_research/5090_write_audit.log")
+MODES={"off":0x01,"rainbow":0x08,"static":0x13,"breathing":0x04,"flashing":0x02,"lightning":0x15,
+       "wave":0x1f,"meteor":0x16,"marquee":0x18,"stack":0x0d,"rhythm":0x0b,"flowing":0x09,
+       "whirling":0x0f,"twisting":0x11,"laminating":0x1d,"fadein":0x14,"patrolling":0x05,
+       "streaming":0x06,"magic":0x07,"raindrop":0x1a}
+
+def _bus_ok():
+    if open("/sys/bus/i2c/devices/i2c-%s/name"%BUS).read().strip()!=EXPECT_BUS_NAME: return False
+    if EXPECT_PCI not in os.path.realpath("/sys/bus/i2c/devices/i2c-%s"%BUS): return False
+    if "10de:2b85" not in subprocess.run("lspci -n -s 01:00.0",shell=True,capture_output=True,text=True).stdout: return False
+    return {"0xEC":rd(0xEC),"0xED":rd(0xED)}=={"0xEC":"0xa1","0xED":"0x82"}   # MCU identity
+
+def rd(reg):
+    p=subprocess.run(["i2cget","-y",BUS,ADDR,hex(reg)],capture_output=True,text=True,timeout=20)
+    return p.stdout.strip() or "ERR"
+
+def wr(reg,val):
+    assert reg in REG_ALLOW, "register %s not in allowlist" % hex(reg)
+    ts=datetime.datetime.now().isoformat(timespec="milliseconds")
+    subprocess.run(["i2cset","-y",BUS,ADDR,hex(reg),hex(val),"b"],check=True,capture_output=True,timeout=20)
+    open(LOG,"a").write(f"{ts} bus={BUS} addr={ADDR} reg={hex(reg)} val={hex(val)} mode=byte-data\n")
+    time.sleep(0.025)
+
+def apply_colour(rgb, mode=0x13, brightness=0x64, speed=0x00):
+    if not _bus_ok():
+        sys.exit("ABORT: /dev/i2c-%s is not the expected RTX 5090 LED bus (name/PCI/identity check failed)" % BUS)
+    for reg,val in [(0x2e,0x00),(0x46,0x01),(0x22,mode),(0x36,brightness),(0x38,speed),
+                    (0x30,rgb[0]),(0x31,rgb[1]),(0x32,rgb[2])]:
+        wr(reg,val)
+    print("ok ->", rgb, "mode=%s brightness=%s" % (hex(mode), hex(brightness)))
+
+def main():
+    ap=argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("action", choices=["set","mode","off","status"])
+    ap.add_argument("value", nargs="?", default="red", help="#rrggbb|colour name, or a mode name")
+    ap.add_argument("--brightness", type=int, default=100, help="0-100")
+    ap.add_argument("--speed", type=int, default=0, help="0-2")
+    a=ap.parse_args()
+    if a.action=="status":
+        print("identity 0xEC/0xED:", rd(0xEC), rd(0xED), "(these two reads are reliable)")
+        print("NOTE: colour/mode registers do NOT read back truthfully on this MCU.")
+        return
+    if a.action=="off":
+        apply_colour((0,0,0), mode=MODES["off"]); return
+    if a.action=="mode":
+        if a.value not in MODES: sys.exit("modes: "+", ".join(sorted(MODES)))
+        apply_colour((255,255,255) if a.value!="static" else (255,0,0), mode=MODES[a.value],
+                     brightness=max(0,min(100,a.brightness)), speed=a.speed); return
+    named={"red":(255,0,0),"green":(0,255,0),"blue":(0,0,255),"white":(255,255,255),
+           "cyan":(0,255,255),"magenta":(255,0,255),"yellow":(255,255,0),"orange":(255,128,0),
+           "purple":(128,0,255),"pink":(255,105,180),"black":(0,0,0)}
+    v=a.value.lower()
+    rgb=named.get(v) or (tuple(int(v.lstrip('#')[i:i+2],16) for i in (0,2,4)) if v.lstrip('#').isalnum() and len(v.lstrip('#'))==6 else None)
+    if not rgb: sys.exit("use a colour name or #rrggbb")
+    apply_colour(rgb, brightness=max(0,min(100,a.brightness)), speed=a.speed)
+
+main()

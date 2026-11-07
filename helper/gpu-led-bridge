@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""Loopback bridge: SignalRGB canvas (UDP) -> MSI RTX 5090 LED MCU.
+
+Packet from the plugin: 53 47 42 31 | R G B | brightness(0-100) | apply(1) / blackout(0)
+Listens on 127.0.0.1 only.
+"""
+import sys, os, socket, argparse, time
+sys.path.insert(0, os.path.expanduser("~/bin"))
+import gpu_led_core as core
+
+MODES={"off":0x01,"rainbow":0x08,"static":0x13,"breathing":0x04,"flashing":0x02,"lightning":0x15,
+       "wave":0x1f,"meteor":0x16,"marquee":0x18,"stack":0x0d,"rhythm":0x0b,"flowing":0x09,
+       "whirling":0x0f,"twisting":0x11,"laminating":0x1d,"fadein":0x14,"patrolling":0x05,
+       "streaming":0x06,"magic":0x07,"raindrop":0x1a}
+MAGIC=b"\x53\x47\x42\x31"
+
+def main():
+    ap=argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=50910)
+    ap.add_argument("--mode", default="static")
+    ap.add_argument("--dry-run", action="store_true", help="receive packets but do not touch the card")
+    a=ap.parse_args()
+    if a.mode not in MODES: sys.exit("unknown mode")
+
+    sock=socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", a.port))
+    print(f"[bridge] listening udp 127.0.0.1:{a.port} mode={a.mode} dry_run={a.dry_run}", flush=True)
+
+    problem=core.gate()
+    if problem:
+        print(f"[bridge] WARNING gate failed before start: {problem}", flush=True)
+    if not a.dry_run:
+        core.init_card(brightness=100, mode=MODES[a.mode])
+        print("[bridge] card initialised (static mode, 100%)", flush=True)
+
+    last=None; last_write=0.0; n=0; since_report=time.time(); last_bright=100
+    while True:
+        data,(host,_) = sock.recvfrom(64)
+        if host!="127.0.0.1" or len(data)<8 or data[:4]!=MAGIC:
+            continue
+        r,g,b,bright,apply=data[4],data[5],data[6],data[7],data[8]
+        if not apply: r=g=b=0
+        now=time.time()
+        if (r,g,b)==last:
+            continue
+        if last is not None and max(abs(r-last[0]),abs(g-last[1]),abs(b-last[2])) < 6:
+            continue
+        if now-last_write < 0.10:
+            continue
+        if a.dry_run:
+            last=(r,g,b); last_write=now; n+=1
+        else:
+            try:
+                core.wr(0x22, MODES[a.mode], tag="canvas")      # mode byte before colour = the latch
+                if bright != last_bright:
+                    core.wr(0x36, bright, tag="brightness"); last_bright = bright
+                core.set_rgb(r,g,b,tag="canvas"); last=(r,g,b); last_write=now; n+=1
+            except Exception as exc:
+                print(f"[bridge] write aborted: {exc}", flush=True)
+                break
+        if now-since_report > 10:
+            print(f"[bridge] {n} updates, last rgb={(r,g,b)} bright={bright}", flush=True)
+            since_report=now
+
+main()
