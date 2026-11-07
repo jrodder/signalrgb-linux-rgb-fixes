@@ -1,4 +1,13 @@
-# MSI RTX 5090 Suprim Liquid RGB on Linux, driven by SignalRGB
+# SignalRGB on Linux: two RGB bugs, diagnosed (one fix shipped, one fix proposed)
+
+| | what | state |
+|---|---|---|
+| **1** | MSI motherboard ARGB headers never register (plugin aborts on a WMI-only BIOS version) | cause + patch: `MSI-HEADERS-LINUX.md`, `msi-wmi-assert.patch` |
+| **2** | GPU RGB unreachable (engine never registers the GPU's own I2C adapters; NVAPI has no I2C on Linux) | cause + working demo: `ENGINE-GPU-I2C-LINUX.md`, plus the plugin + helper below |
+
+Everything below is the working implementation for **#2**: lighting an MSI RTX 5090 Suprim Liquid SOC from
+SignalRGB on Linux. Verified on SignalRGB 2.5.85-7583, NVIDIA 615.71.09.
+
 
 Lights the SOC LEDs of an **MSI GeForce RTX 5090 SUPRIM LIQUID SOC** (`10de:2b85`,
 subsystem `1462:5300`) on **SignalRGB for Linux**, with no OpenRGB and no NVAPI.
@@ -76,5 +85,9 @@ Blackwell plugin) and are unverified, so they are not implemented here.
 Other MSI Blackwell/Ada SKUs (widen `find_bus()`/`GPU_VENDOR_DEVICE`), other vendors' addresses
 (OpenRGB's detectors list them all on port 1), suspend/resume behaviour, and dual-GPU boxes.
 
-Not affiliated with WhirlwindFX. Trademarks belong to their owners. Add a licence file before publishing
-if you care about the terms.
+## Licence
+Our code (the plugin and helper in `plugin/` and `helper/`, and the docs) is MIT - see `LICENSE`. We have
+deliberately **not** redistributed any SignalRGB plugin source; `msi-wmi-assert.patch` is a 4-line change
+meant to be applied to the reader's own copy. Not affiliated with WhirlwindFX; trademarks belong to their
+owners. If WhirlwindFX would like any of this taken down or moved upstream, open an issue and it's yours -
+the goal is for the engine to do this and this repo to become redundant.

@@ -1,0 +1,46 @@
+From b39dc5c3c14915e32b1e305b5e6d4a7a36beadec Mon Sep 17 00:00:00 2001
+From: J-Rod <jrod@localhost>
+Date: Sat, 7 Nov 2026 18:35:59 -0500
+Subject: [PATCH] Msi 185-byte controller: do not abort when the BIOS version
+ is unavailable (Linux)
+
+SystemInfo::GetBiosInfo() has no non-Windows implementation - the binary reads
+/sys/class/dmi/id/product_name and sys_vendor for the motherboard name, but never
+bios_version/bios_date - so the Assert.fail() in fetchWmiInfo() fired on every Linux
+start and aborted Initialize() before initializeMotherboard().
+
+Notify instead of abort, and only call compareBiosVersion() when the data exists.
+The motherboard-name path and all packet paths are untouched.
+
+Tested: the equivalent change, applied to a copy of this plugin in the user plugin
+directory on SignalRGB for Linux 2.5.85-7583 with an MSI MAG X870E TOMAHAWK WIFI
+(0db0:0076): the headers enumerate and follow canvas effects.
+---
+ .../MSI_185Byte_Controller_0x0DB0.js                     | 9 ++++-----
+ 1 file changed, 4 insertions(+), 5 deletions(-)
+
+diff --git a/Plugins/Msi/185 Byte Motherboard Controller/MSI_185Byte_Controller_0x0DB0.js b/Plugins/Msi/185 Byte Motherboard Controller/MSI_185Byte_Controller_0x0DB0.js
+index 55e9108..7758f88 100644
+--- a/Plugins/Msi/185 Byte Motherboard Controller/MSI_185Byte_Controller_0x0DB0.js	
++++ b/Plugins/Msi/185 Byte Motherboard Controller/MSI_185Byte_Controller_0x0DB0.js	
+@@ -180,13 +180,12 @@ function fetchWmiInfo() {
+ 	motherboardName = motherboardInfo.model;
+ 
+ 	if(!biosInfo) {
+-		device.notify("Failed to fetch bios version from WMI!", "Please reach out to official SignalRGB support for help.", 1);
+-		Assert.fail("Failed to fetch bios version from WMI after 10 attempts!");
+-
+-		return;
++		device.notify("No BIOS version available!", "BIOS version is read over WMI, which is Windows-only - the BIOS version check is skipped.", 1);
+ 	}
+ 
+-	compareBiosVersion(biosInfo, motherboardName);
++	if(biosInfo) {
++		compareBiosVersion(biosInfo, motherboardName);
++	}
+ }
+ 
+ function compareBiosVersion(biosInfo, motherboardName) {
+-- 
+2.53.0
+
