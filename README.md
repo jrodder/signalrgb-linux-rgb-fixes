@@ -75,6 +75,16 @@ Two things that will bite you if you write your own version:
 - every transaction appended to `~/srgb-5090-audit.log`
 - `~/bin/gpu-led set #rrggbb` / `off` / `status` for manual control (do not run while the bridge runs)
 
+## Follow upstream updates (important)
+A copied plugin file **pins** that plugin version - upstream fixes would never reach you. So do not hand-
+copy overrides: use `helper/srgb-plugin-sync`, run at login by `systemd/srgb-plugin-sync.service`. It
+re-derives the override from whatever the plugin CDN currently holds, and **deletes the override as soon as
+upstream no longer contains the fatal assert**, so their fix takes over automatically. It also notices
+whether the engine has started creating buses on GPU I2C ports (i.e. upstream fixed GPU RGB) and retires
+the local 5090 plugin when it does. Logs to `~/srgb-plugin-sync.log`, keeps timestamped backups in
+`~/srgb-plugin-backup/`. Run it with `--dry-run` first; `--auto-retire-gpu-plugin` is what allows the
+automatic retirement.
+
 ## Make it permanent (Linux, systemd user service)
 ```bash
 mkdir -p ~/.config/systemd/user

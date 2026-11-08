@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Keep the local SignalRGB plugin overrides honest: re-derive them from the current upstream
+plugin at login, and remove them as soon as upstream contains the fix.
+
+Run as a systemd user service (oneshot) at login. Safe by default: --dry-run only reports.
+"""
+import argparse, datetime, glob, os, re, shutil, subprocess, sys
+
+HOME = os.path.expanduser("~")
+CDN   = f"{HOME}/.cache/WhirlwindFX/SignalRgb/plugin_cdn/*/Plugins"
+OVR   = f"{HOME}/Documents/WhirlwindFX/Plugins"
+BACKUP= f"{HOME}/srgb-plugin-backup"
+LOGF  = f"{HOME}/srgb-plugin-sync.log"
+PLUGIN_REL = "Msi/185 Byte Motherboard Controller/MSI_185Byte_Controller_0x0DB0.js"
+FATAL = 'Assert.fail("Failed to fetch bios version from WMI'
+GPU_PLUGIN = f"{OVR}/MSI_RTX5090_Linux.js"
+now = lambda: datetime.datetime.now().isoformat(timespec="seconds")
+
+def log(msg):
+    line = f"{now()} {msg}"
+    print(line, flush=True)
+    with open(LOGF, "a") as fh: fh.write(line + "\n")
+
+def upstream_copy():
+    hits = sorted(glob.glob(f"{CDN}/{PLUGIN_REL}"), key=lambda p: os.path.getmtime(p), reverse=True)
+    return hits[0] if hits else None
+
+def patched(text):
+    """Replace only the fatal BIOS-version gate; every packet path is untouched. Preserves CRLF."""
+    crlf = "\r\n" in text
+    lines = text.split("\r\n" if crlf else "\n")
+    idx = [i for i, l in enumerate(lines) if FATAL in l]
+    if not idx:
+        return text, False                       # upstream already fixed it
+    i = idx[0]
+    j = i - 1 if "device.notify" in lines[i - 1] else i
+    k = i
+    while k + 1 < len(lines) and lines[k + 1].strip() in ("", "return;"): k += 1
+    end = j
+    while lines[end].strip() != "}": end += 1
+    lines[j:end + 1] = ['\t\tdevice.notify("No BIOS version available!", "BIOS version is read over WMI, which is Windows-only - the BIOS version check is skipped.", 1);',
+                        '\t}']
+    for x, l in enumerate(lines):
+        if l.strip().startswith("compareBiosVersion(biosInfo, motherboardName);"):
+            ind = l[:len(l) - len(l.lstrip())]
+            lines[x] = (ind + "if(biosInfo) {\n" + ind + "\tcompareBiosVersion(biosInfo, motherboardName);\n" + ind + "}")
+            break
+    return "\r\n".join(lines) if crlf else "\n".join(lines), True
+
+def engine_enumerates_gpu_buses():
+    """Has the app started creating buses on the GPU's own I2C ports yet? (i.e. upstream fixed #2)"""
+    logs = sorted(glob.glob(f"{HOME}/.local/share/WhirlwindFX/SignalRgb/Logs/SignalRGB_*.log"),
+                  key=os.path.getmtime)[-1:]
+    for lg in logs:
+        try: txt = open(lg, errors="ignore").read()
+        except OSError: continue
+        if re.search(r"Created Linux I2C bus.*NVIDIA i2c adapter|NVIDIA i2c adapter \d+ at.*bus", txt, re.I):
+            return lg
+    return None
+
+def sync_plugin(dry):
+    src = upstream_copy()
+    dst = os.path.join(OVR, os.path.basename(PLUGIN_REL))
+    if not src:
+        log("upstream 185-byte plugin not in the CDN cache yet - leaving existing override untouched")
+        return
+    text = open(src, "rb").read().decode("utf-8")
+    new, needed = patched(text)
+    if not needed:
+        log("upstream no longer aborts on the BIOS version - removing local override so their fix is used")
+        if not dry and os.path.exists(dst):
+            os.makedirs(BACKUP, exist_ok=True)
+            kept = f"{BACKUP}/{now().replace(':','-')}-removed-override-{os.path.basename(dst)}"
+            shutil.copy2(dst, kept); os.remove(dst)
+            log(f"override removed (previous copy kept at {kept})")
+        return
+    cur = open(dst, "rb").read().decode("utf-8") if os.path.exists(dst) else None
+    if cur == new:
+        log(f"override already current for upstream build {os.path.basename(src)[:8]} ({len(text)} B)")
+        return
+    log(f"upstream still contains the fatal BIOS assert - writing override for build {len(text)} B")
+    if dry:
+        log("dry-run: not written"); return
+    os.makedirs(OVR, exist_ok=True); os.makedirs(BACKUP, exist_ok=True)
+    if cur is not None:
+        shutil.copy2(dst, f"{BACKUP}/{now().replace(':','-')}-previous-override-{os.path.basename(dst)}")
+    with open(dst, "wb") as fh: fh.write(new.encode("utf-8"))
+    subprocess.run(["node", "--check", dst], check=True, capture_output=True)
+    log("override written and syntax-checked")
+
+def check_engine(dry, auto):
+    lg = engine_enumerates_gpu_buses()
+    if not lg:
+        log("engine still does not enumerate the GPU's I2C ports - local 5090 plugin stays active")
+        return
+    log(f"NOTICE: newest app log {lg} shows the engine creating buses on GPU I2C ports; "
+        f"upstream may have fixed GPU RGB. If a real MSI GPU device now appears in SignalRGB, retire the "
+        f"local one: systemctl --user disable --now srgb-5090-led.service && "
+        f"rm {GPU_PLUGIN}")
+    if auto and os.path.exists(GPU_PLUGIN):
+        if dry: log("dry-run: would retire the local 5090 plugin"); return
+        os.makedirs(BACKUP, exist_ok=True)
+        dst = f"{BACKUP}/{now().replace(':','-')}-retired-{os.path.basename(GPU_PLUGIN)}"
+        shutil.move(GPU_PLUGIN, dst); log(f"local 5090 plugin retired to {dst}")
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--auto-retire-gpu-plugin", action="store_true",
+                    help="also move the local 5090 plugin aside when the engine appears to support the card")
+    a = ap.parse_args()
+    log(f"--- sync (dry_run={a.dry_run}) ---")
+    sync_plugin(a.dry_run); check_engine(a.dry_run, a.auto_retire_gpu_plugin)
+
+main()
