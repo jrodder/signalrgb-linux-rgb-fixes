@@ -1,0 +1,17 @@
+[Unit]
+Description=SignalRGB 5090 LED bridge (canvas colours -> MSI GPU LED controller)
+Documentation=file:/home/jrod/Desktop/srgb_research/posting/signalrgb-linux-rgb-fixes/README.md
+After=default.target
+StartLimitBurst=3
+StartLimitIntervalSec=600
+
+[Service]
+Type=simple
+ExecStart=/home/jrod/bin/gpu-led-bridge
+Nice=10
+Restart=on-failure
+RestartSec=5
+# refuse an endless crash loop; the service exits by itself if the card gate fails
+
+[Install]
+WantedBy=default.target

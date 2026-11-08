@@ -75,6 +75,18 @@ Two things that will bite you if you write your own version:
 - every transaction appended to `~/srgb-5090-audit.log`
 - `~/bin/gpu-led set #rrggbb` / `off` / `status` for manual control (do not run while the bridge runs)
 
+## Make it permanent (Linux, systemd user service)
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/srgb-5090-led.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now srgb-5090-led.service
+journalctl --user -u srgb-5090-led.service -f        # watch it
+```
+It starts at login and needs no sudo (your user must be in the `i2c` group). The bridge deliberately does
+**not** write to the card at boot: it waits for the first colour from SignalRGB, so if the app isn't
+running the GPU is never touched. It also exits on its own if the bus/identity gate fails.
+Undo: `systemctl --user disable --now srgb-5090-led.service`.
+
 ## Known scope
 Single zone, one colour - which matches SignalRGB's own current support for this SKU (it lives in the
 legacy single-zone `MSI_GPU.js`; commit `747083d4` "Reverting Suprim Liquid, no testers found" removed it
