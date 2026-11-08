@@ -72,6 +72,10 @@ def sync_plugin(dry):
             os.makedirs(BACKUP, exist_ok=True)
             kept = f"{BACKUP}/{now().replace(':','-')}-removed-override-{os.path.basename(dst)}"
             shutil.copy2(dst, kept); os.remove(dst)
+            for sib in (dst + "m",):
+                if os.path.exists(sib):
+                    shutil.copy2(sib, f"{BACKUP}/{now().replace(':','-')}-removed-{os.path.basename(sib)}")
+                    os.remove(sib)
             log(f"override removed (previous copy kept at {kept})")
         return
     cur = open(dst, "rb").read().decode("utf-8") if os.path.exists(dst) else None
@@ -87,6 +91,9 @@ def sync_plugin(dry):
     with open(dst, "wb") as fh: fh.write(new.encode("utf-8"))
     subprocess.run(["node", "--check", dst], check=True, capture_output=True)
     log("override written and syntax-checked")
+    for sib in (dst + "m",):                     # keep a transpiled sibling from going stale
+        if os.path.exists(sib):
+            shutil.copy2(dst, sib); log(f"refreshed sibling {os.path.basename(sib)}")
 
 def check_engine(dry, auto):
     lg = engine_enumerates_gpu_buses()
